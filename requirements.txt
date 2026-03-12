@@ -1,6 +1,5 @@
 streamlit
 pandas
-requests
 groq
-matplotlib
-scipy
+requests
+beautifulsoup4
