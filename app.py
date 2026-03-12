@@ -14,93 +14,106 @@ except:
     st.error("Secrets saknas i Streamlit Cloud!")
     st.stop()
 
-# --- SCRAPER-FUNKTION (Surfar utan API) ---
-def scrape_daily_matches():
-    # Vi använder en sida som listar dagens tips
-    url = "https://www.betshoot.com/football/predictions/"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+# --- SCRAPER FUNKTION (FÖRBÄTTRAD) ---
+def get_matches_safe():
+    # Vi testar en annan källa som ofta är mer öppen för enkla anrop
+    url = "https://www.forebet.com/en/football-tips-and-predictions-for-today"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko)'
+    }
     
     try:
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
         matches = []
         
-        # Hittar alla match-containrar på sidan
-        for item in soup.select('.bet-item'):
+        # Forebet-specifik skrapning
+        for row in soup.select('.predict_row'):
             try:
-                teams = item.select_one('.teams').text.strip()
-                league = item.select_one('.league').text.strip()
-                tip = item.select_one('.tip').text.strip()
-                time = item.select_one('.time').text.strip()
-                
-                # Dela upp hemmalag och bortalag
-                home, away = teams.split(' vs ')
+                home = row.select_one('.homeTeam span').text.strip()
+                away = row.select_one('.awayTeam span').text.strip()
+                league = row.select_one('.short_league').text.strip()
+                # Prediction/Procent (ex: 1, X, 2)
+                pred = row.select_one('.pred_res').text.strip()
                 
                 matches.append({
                     "Liga": league,
                     "Match": f"{home} - {away}",
-                    "Tips": tip,
-                    "Tid": time,
+                    "Tips": pred,
                     "Home": home,
                     "Away": away
                 })
             except: continue
         return matches
-    except Exception as e:
-        st.error(f"Scraping-fel: {e}")
+    except:
         return []
 
 # --- UI DESIGN ---
-st.set_page_config(page_title="Football Scraper Pro", layout="wide")
+st.set_page_config(page_title="Football Terminal v2", layout="wide")
 
 if 'saved' not in st.session_state: st.session_state.saved = []
 
-st.title("⚽ Football Intelligence Scraper")
-st.write(f"Hämtar data live från webben: {datetime.date.today()}")
+st.title("⚽ Football Intelligence Terminal")
 
-# Sidomeny
-with st.sidebar:
-    st.header("⭐ Bevakningslista")
-    for s in st.session_state.saved:
-        st.write(f"• {s}")
-    if st.button("Rensa"):
-        st.session_state.saved = []
-        st.rerun()
+# --- NAVIGATION ---
+menu = st.tabs(["📅 Dagens Matcher", "✍️ Manuell Analys", "⭐ Sparade"])
 
-# --- HUVUDINNEHÅLL ---
-if st.button("🔄 Uppdatera matcher från webben"):
-    st.rerun()
-
-matches = scrape_daily_matches()
-
-if not matches:
-    st.warning("Kunde inte hämta matcher just nu. Sidan kan vara nere eller blockera anropet.")
-else:
-    # Gruppera efter liga
-    df = pd.DataFrame(matches)
-    for league, group in df.groupby('Liga'):
-        with st.expander(f"🏆 {league} ({len(group)} matcher)"):
-            for _, row in group.iterrows():
+# TAB 1: AUTOMATISK HÄMTNING
+with menu[0]:
+    if st.button("🔄 Hämta Matcher Nu"):
+        with st.spinner("Surfar efter matcher..."):
+            matches = get_matches_safe()
+            st.session_state.daily_matches = matches
+    
+    if 'daily_matches' in st.session_state and st.session_state.daily_matches:
+        for m in st.session_state.daily_matches:
+            with st.container():
                 c1, c2, c3 = st.columns([3, 1, 1])
+                c1.write(f"**{m['Match']}** ({m['Liga']})")
+                c1.caption(f"Tips: {m['Tips']}")
                 
-                with c1:
-                    st.write(f"**{row['Match']}**")
-                    st.caption(f"Avspark: {row['Tid']} | Tips: {row['Tips']}")
+                if c2.button("🤖 Analysera", key=f"ai_{m['Match']}"):
+                    prompt = f"Gör en snabb bettinganalys: {m['Match']}. Tips: {m['Tips']}. Ge ett proffstips."
+                    res = client.chat.completions.create(model="llama-3.1-8b-instant", messages=[{"role":"user", "content":prompt}])
+                    st.info(res.choices[0].message.content)
                 
-                with c2:
-                    if st.button("⭐ Spara", key=f"s_{row['Match']}"):
-                        st.session_state.saved.append(row['Match'])
-                        st.toast("Sparad!")
+                if c3.button("⭐ Spara", key=f"s_{m['Match']}"):
+                    st.session_state.saved.append(m['Match'])
+                    st.toast("Sparad!")
+                st.divider()
+    else:
+        st.info("Klicka på knappen ovan för att skrapa dagens matcher. Om det misslyckas, använd 'Manuell Analys'.")
+
+# TAB 2: MANUELL INMATNING (Säkerhetsnätet)
+with menu[1]:
+    st.subheader("Skriv in match själv för AI-analys")
+    m_home = st.text_input("Hemmalag")
+    m_away = st.text_input("Bortalag")
+    m_league = st.selectbox("Liga", ["Premier League", "Serie A", "La Liga", "Bundesliga", "Champions League", "Europa League"])
+    
+    if st.button("Generera AI-Rapport"):
+        if m_home and m_away:
+            with st.spinner("AI-Boten tänker..."):
+                prompt = f"Analysera matchen {m_home} vs {m_away} i {m_league}. Kolla form, skador och ge ett speltips."
+                res = client.chat.completions.create(model="llama-3.1-8b-instant", messages=[{"role":"user", "content":prompt}])
+                analysis = res.choices[0].message.content
+                st.success("Analys Klar!")
+                st.markdown(analysis)
                 
-                with c3:
-                    if st.button("🤖 AI Analys", key=f"ai_{row['Match']}"):
-                        prompt = f"Gör en kort bettinganalys för {row['Match']} i {league}. Tipset är {row['Tips']}. Är det ett bra spel?"
-                        res = client.chat.completions.create(model="llama-3.1-8b-instant", messages=[{"role":"user", "content":prompt}])
-                        analysis = res.choices[0].message.content
-                        st.info(analysis)
-                        
-                        # Telegram-knapp dyker upp efter analys
-                        if st.button("✈️ Skicka till Telegram", key=f"tg_{row['Match']}"):
-                            msg = f"⚽ *MATCHTIPS*\n{row['Match']}\n🏆 {league}\n📈 Tips: {row['Tips']}\n\n{analysis}"
-                            requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_ID, "text": msg, "parse_mode": "Markdown"})
-                            st.success("Skickat!")
+                if st.button("✈️ Skicka till Telegram"):
+                    msg = f"⚽ *MANUELL ANALYS*\n{m_home} vs {m_away}\n\n{analysis}"
+                    requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", json={"chat_id": TG_ID, "text": msg, "parse_mode": "Markdown"})
+                    st.toast("Skickat!")
+        else:
+            st.warning("Fyll i båda lagen.")
+
+# TAB 3: SPARADE
+with menu[2]:
+    if st.session_state.saved:
+        for s in st.session_state.saved:
+            st.write(f"✅ {s}")
+        if st.button("Rensa listan"):
+            st.session_state.saved = []
+            st.rerun()
+    else:
+        st.write("Inga matcher sparade ännu.")
