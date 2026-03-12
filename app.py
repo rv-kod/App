@@ -1,149 +1,117 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from scipy.stats import poisson
+import requests
 from groq import Groq
 import datetime
 
 # --- KONFIGURATION ---
+# Din RapidAPI-nyckel som du skickade
+RAPID_KEY = "6f284e1b80mshe8e1f0c239f60d6p1df8a1jsn818617882208"
+
 try:
     client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+    # Telegram-info från dina secrets
+    TG_TOKEN = st.secrets["TELEGRAM_TOKEN"]
+    TG_ID = st.secrets["TELEGRAM_CHAT_ID"]
 except:
-    st.error("GROQ_API_KEY saknas i Secrets!")
+    st.error("GROQ_API_KEY eller Telegram-secrets saknas i Streamlit Cloud!")
     st.stop()
 
-# --- DATA-FUNKTIONER ---
-@st.cache_data(ttl=3600)
-def load_data(league):
-    # Källor för historisk data (för att räkna ut styrka)
-    sources = {
-        "Premier League": "https://www.football-data.co.uk/mmz4281/2425/E0.csv",
-        "SHL": "https://raw.githubusercontent.com/frenberg/shl-stats/master/data/shl_results.csv", # Historik
-        "Champions League": "https://www.football-data.co.uk/mmz4281/2425/E0.csv" # Placeholder
+# --- API FUNKTIONER ---
+def get_football_predictions():
+    # Vi använder /predictions för att få dagens matcher
+    url = "https://today-football-prediction.p.rapidapi.com/predictions/"
+    headers = {
+        "x-rapidapi-key": RAPID_KEY,
+        "x-rapidapi-host": "today-football-prediction.p.rapidapi.com",
+        "Content-Type": "application/json"
     }
-    
     try:
-        df = pd.read_csv(sources.get(league))
-        # Standardisera SHL-kolumner om det är hockey
-        if league == "SHL":
-            df = df.rename(columns={'home_team': 'HomeTeam', 'away_team': 'AwayTeam', 'home_goals': 'FTHG', 'away_goals': 'FTAG'})
-        return df
-    except:
-        return pd.DataFrame()
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"API Fel: {response.status_code}")
+            return None
+    except Exception as e:
+        st.error(f"Kunde inte ansluta: {e}")
+        return None
 
-def get_poisson_probs(home_team, away_team, df):
-    # Beräkna genomsnitt
-    avg_home_g = df['FTHG'].mean()
-    avg_away_g = df['FTAG'].mean()
-    
-    # Styrka (baserat på senaste 20 matcherna för bättre form-koll)
-    def team_strength(team, is_home):
-        side = 'HomeTeam' if is_home else 'AwayTeam'
-        goal_col = 'FTHG' if is_home else 'FTAG'
-        against_col = 'FTAG' if is_home else 'FTHG'
-        
-        team_df = df[(df[side] == team)].tail(10)
-        if team_df.empty: return 1.0, 1.0
-        
-        att = team_df[goal_col].mean() / (avg_home_g if is_home else avg_away_g)
-        defen = team_df[against_col].mean() / (avg_away_g if is_home else avg_home_g)
-        return att, defen
-
-    h_att, h_def = team_strength(home_team, True)
-    a_att, a_def = team_strength(away_team, False)
-    
-    exp_h = h_att * a_def * avg_home_g
-    exp_a = a_att * h_def * avg_away_g
-    
-    # Sannolikheter
-    h_probs = [poisson.pmf(i, exp_h) for i in range(10)]
-    a_probs = [poisson.pmf(i, exp_a) for i in range(10)]
-    
-    matrix = np.outer(h_probs, a_probs)
-    
-    win = np.sum(np.tril(matrix, -1))
-    draw = np.sum(np.diag(matrix))
-    loss = np.sum(np.triu(matrix, 1))
-    
-    return win, draw, loss, exp_h, exp_a
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
+    payload = {"chat_id": TG_ID, "text": message, "parse_mode": "Markdown"}
+    requests.post(url, json=payload)
 
 # --- UI DESIGN ---
-st.set_page_config(page_title="Sport Terminal Pro", layout="wide")
-st.title("🏆 Betting Intelligence Terminal")
+st.set_page_config(page_title="Football Intel Pro", layout="wide")
 
+if 'saved_matches' not in st.session_state:
+    st.session_state.saved_matches = []
+
+st.title("⚽ Football Prediction Terminal")
+st.write(f"Datum: {datetime.date.today()}")
+
+# --- SIDOMENY ---
 with st.sidebar:
-    st.header("Inställningar")
-    valda_ligor = st.multiselect("Välj ligor att bevaka", 
-                                ["Premier League", "SHL", "Champions League"],
-                                default=["Premier League", "SHL"])
-    st.divider()
-    st.write("Dagens datum:", datetime.date.today())
+    st.header("⭐ Sparade Matcher")
+    if st.session_state.saved_matches:
+        for m in st.session_state.saved_matches:
+            st.write(f"• {m}")
+        if st.button("Rensa listan"):
+            st.session_state.saved_matches = []
+            st.rerun()
+    else:
+        st.write("Inga sparade matcher.")
 
-# --- HUVUDSIDA ---
-tabs = st.tabs(["📅 Dagens Matcher", "📊 Djupanalys", "🤖 AI Strategi"])
+# --- HÄMTA DATA ---
+if st.button("🔄 Uppdatera Dagens Matcher", type="primary"):
+    st.rerun()
 
-# TAB 1: DAGENS MATCHER (Simulerad lista baserat på data)
-with tabs[0]:
-    st.subheader("Dagens Spelförslag & Analys")
-    
-    all_predictions = []
-    
-    for league in valda_ligor:
-        data = load_data(league)
-        if not data.empty:
-            teams = sorted(data['HomeTeam'].unique())
-            # Vi slumpar fram 2 "kommande" matcher för demo-syfte 
-            # (Riktiga API:er krävs för exakt dagsschema)
-            m1, m2 = teams[0], teams[-1]
-            m3, m4 = teams[1], teams[-2]
-            
-            for h, a in [(m1, m2), (m3, m4)]:
-                w, d, l, eh, ea = get_poisson_probs(h, a, data)
-                all_predictions.append({
-                    "Liga": league,
-                    "Match": f"{h} vs {a}",
-                    "Vinst %": f"{round(w*100,1)}%",
-                    "Oavgjort %": f"{round(d*100,1)}%",
-                    "Förlust %": f"{round(l*100,1)}%",
-                    "Väntat mål": f"{round(eh,1)}-{round(ea,1)}"
-                })
-    
-    st.table(all_predictions)
+data = get_football_predictions()
 
-# TAB 2: DJUPANALYS
-with tabs[1]:
-    league_choice = st.selectbox("Välj liga för analys", valda_ligor)
-    data = load_data(league_choice)
+if data and 'data' in data:
+    # Ligor vi vill bevaka
+    top_leagues = ["Premier League", "Serie A", "La Liga", "Bundesliga", "Champions League", "Europa League"]
     
-    if not data.empty:
-        teams = sorted(list(set(data['HomeTeam'].unique())))
-        c1, c2 = st.columns(2)
-        home = c1.selectbox("Hemmalag", teams, key="h1")
-        away = c2.selectbox("Bortalag", teams, key="a1")
+    for match in data['data']:
+        league = match.get('league_name', 'Unknown')
         
-        if st.button("Generera Full Analys"):
-            w, d, l, eh, ea = get_poisson_probs(home, away, data)
+        # Filtrera (Valfritt: Ta bort if-satsen om du vill se ALLA ligor)
+        if any(l in league for l in top_leagues):
+            home = match.get('home_team')
+            away = match.get('away_team')
+            prediction = match.get('prediction')
+            prob = match.get('probability', {})
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric(home, f"{round(w*100,1)}%", "Hemmaseger")
-            col2.metric("Oavgjort", f"{round(d*100,1)}%")
-            col3.metric(away, f"{round(l*100,1)}%", "Bortaseger")
-            
-            # AI-Analys
-            prompt = f"""Analysera matchen {home} mot {away} i {league_choice}. 
-            Våra beräkningar säger: {home} vinner med {round(w*100)}% sannolikhet. 
-            Väntat resultat: {round(eh,1)} - {round(ea,1)}. 
-            Ge ett kort, professionellt speltips baserat på sannolikheten."""
-            
-            with st.spinner("AI Analyserar..."):
-                response = client.chat.completions.create(model="llama-3.1-8b-instant", messages=[{"role": "user", "content": prompt}])
-                st.info(response.choices[0].message.content)
-
-# TAB 3: AI STRATEGI
-with tabs[2]:
-    st.subheader("Fråga AI om Betting")
-    user_q = st.chat_input("T.ex: Hur ska jag spela på SHL ikväll?")
-    if user_q:
-        st.write(f"USER: {user_q}")
-        res = client.chat.completions.create(model="llama-3.1-8b-instant", messages=[{"role": "user", "content": user_q}])
-        st.write(f"AI: {res.choices[0].message.content}")
+            with st.expander(f"🏟 {home} vs {away} ({league})"):
+                col1, col2, col3 = st.columns([2, 1, 1])
+                
+                with col1:
+                    st.write(f"**Tips:** {prediction}")
+                    if prob:
+                        st.write(f"Sannolikhet: H({prob.get('1')}% ) X({prob.get('x')}% ) B({prob.get('2')}% )")
+                
+                with col2:
+                    if st.button("⭐ Spara", key=f"sv_{home}"):
+                        st.session_state.saved_matches.append(f"{home}-{away}")
+                        st.toast("Sparad till listan!")
+                
+                with col3:
+                    if st.button("🤖 AI Analys", key=f"ai_{home}"):
+                        prompt = f"Analysera matchen {home} vs {away} i {league}. Tips: {prediction}. Sannolikheter: {prob}. Ge ett kort proffstips."
+                        analysis = client.chat.completions.create(
+                            model="llama-3.1-8b-instant",
+                            messages=[{"role": "user", "content": prompt}]
+                        ).choices[0].message.content
+                        
+                        st.info(analysis)
+                        
+                        # Skicka till Telegram-knapp
+                        if st.button("✈️ Skicka till Telegram", key=f"tg_{home}"):
+                            msg = f"🔥 *MATCHANALYS*\n\n{home} vs {away}\nTips: {prediction}\n\n{analysis}"
+                            send_telegram(msg)
+                            st.success("Skickat till mobilen!")
+                
+                st.divider()
+else:
+    st.info("Inga matcher hittades för tillfället. Försök igen om en stund.")
