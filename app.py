@@ -9,13 +9,13 @@ try:
     api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
     
-    # Vi använder 'gemini-1.5-flash-latest' vilket är den mest robusta adressen
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    # Vi byter till det mest universella namnet som fungerar överallt
+    model = genai.GenerativeModel('models/gemini-1.5-flash')
     
     TG_TOKEN = st.secrets["TELEGRAM_TOKEN"]
     TG_ID = st.secrets["TELEGRAM_CHAT_ID"]
 except Exception as e:
-    st.error("Kunde inte starta AI-modellen. Kontrollera din API-nyckel i Secrets.")
+    st.error(f"Kunde inte starta AI-modellen: {e}")
     st.stop()
 
 # --- MATEMATISK MOTOR ---
