@@ -41,24 +41,16 @@ st.caption(f"Datum: {datetime.date.today()}")
 st.header("1. Hitta Matcher")
 league = st.selectbox("Välj liga", ["Europa League", "Champions League", "Premier League", "Serie A", "La Liga", "Allsvenskan"])
 
+# Uppdatera sök-funktionen i din app.py:
 if st.button(f"🔍 Visa matcher i {league}"):
-    with st.spinner("Söker... (Vänta ca 10 sek om det laggar)"):
-        try:
-            prompt = f"Vilka fotbollsmatcher spelas idag {datetime.date.today()} i {league}? Svara ENDAST med 'Hemmalag - Bortalag', en per rad."
-            response = model.generate_content(prompt)
-            
-            if response.text:
-                matches = [line.strip() for line in response.text.split('\n') if "-" in line]
-                if matches:
-                    st.session_state.found_matches = matches
-                    st.success(f"Hittade {len(matches)} matcher!")
-                else:
-                    st.warning("Inga matcher hittades för idag. Skriv in manuellt nedan.")
-        except Exception as e:
-            if "429" in str(e):
-                st.error("Kvoten är full! Vänta 60 sekunder innan du klickar igen.")
-            else:
-                st.error(f"Ett fel uppstod: {e}")
+    with st.spinner("Hämtar dagens schema..."):
+        # Vi lägger till 'Hitta faktiska matcher för idag [DATUM]'
+        prompt = f"Vilka fotbollsmatcher spelas idag {datetime.date.today()} i {league}? Svara ENDAST med matcherna i listformat: Hemmalag - Bortalag. Inget annat snack."
+        response = model.generate_content(prompt)
+        
+        # Detta rensar bort allt onödigt och visar bara listan
+        st.markdown(f"### Matcher idag i {league}:")
+        st.write(response.text)
 
 # Val av match
 if "found_matches" in st.session_state and st.session_state.found_matches:
