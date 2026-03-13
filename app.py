@@ -4,20 +4,25 @@ import requests
 import datetime
 import math
 
-# --- KONFIGURATION ---
+# --- KONFIGURATION SOM FIXAR 404 ---
 try:
     api_key = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=api_key)
     
-    # Vi byter till det mest universella namnet som fungerar överallt
-    model = genai.GenerativeModel('models/gemini-1.5-flash')
+    # Vi provar 'gemini-pro' som är den mest stabila grundmodellen
+    try:
+        model = genai.GenerativeModel('gemini-pro')
+        # Ett snabbt test för att se om den svarar
+        model.generate_content("test") 
+    except:
+        # Om gemini-pro misslyckas, prova den absolut senaste flash-versionen
+        model = genai.GenerativeModel('gemini-1.5-flash-8b')
     
     TG_TOKEN = st.secrets["TELEGRAM_TOKEN"]
     TG_ID = st.secrets["TELEGRAM_CHAT_ID"]
 except Exception as e:
-    st.error(f"Kunde inte starta AI-modellen: {e}")
+    st.error(f"AI-modellen hittades inte. Prova att skapa en NY API-nyckel på aistudio.google.com")
     st.stop()
-
 # --- MATEMATISK MOTOR ---
 def calculate_poisson(exp_h, exp_a):
     h_win, d, a_win = 0, 0, 0
